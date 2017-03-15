@@ -20,7 +20,11 @@ require 'rspec/rails'
 # directory. Alternatively, in the individual `*_spec.rb` files, manually
 # require only the support files necessary.
 #
-# Dir[Rails.root.join('spec/support/**/*.rb')].each { |f| require f }
+
+require 'elasticsearch/extensions/test/cluster'
+ENV["TEST_CLUSTER_NODES"] = "2"
+
+Dir[Rails.root.join('spec/support/**/*.rb')].each { |f| require f }
 
 # Checks for pending migration and applies them before tests are run.
 # If you are not using ActiveRecord, you can remove this line.
@@ -28,7 +32,7 @@ ActiveRecord::Migration.maintain_test_schema!
 
 RSpec.configure do |config|
   # Remove this line if you're not using ActiveRecord or ActiveRecord fixtures
-  config.fixture_path = "#{::Rails.root}/spec/fixtures"
+  # config.fixture_path = "#{::Rails.root}/spec/fixtures"
 
   # If you're not using ActiveRecord, or you'd prefer not to run each of your
   # examples within a transaction, remove the following line or assign false
@@ -57,4 +61,37 @@ RSpec.configure do |config|
 
   # Load Factory Girl syntax methods
   config.include FactoryGirl::Syntax::Methods
+
+  # Create indexes for all elastic searchable models
+  config.before :each, elasticsearch: true do
+    ActiveRecord::Base.descendants.each do |model|
+      if model.respond_to?(:__elasticsearch__)
+        begin
+          model.__elasticsearch__.create_index!
+          model.__elasticsearch__.refresh_index!
+        rescue => Elasticsearch::Transport::Transport::Errors::NotFound
+          # This kills "Index does not exist" errors being written to console
+          # by this: https://github.com/elastic/elasticsearch-rails/blob/738c63efacc167b6e8faae3b01a1a0135cfc8bbb/elasticsearch-model/lib/elasticsearch/model/indexing.rb#L268
+        rescue => e
+          STDERR.puts "There was an error creating the elasticsearch index for #{model.name}: #{e.inspect}"
+        end
+      end
+    end
+  end
+
+  # Delete indexes for all elastic searchable models to ensure clean state between tests
+  config.after :each, elasticsearch: true do
+    ActiveRecord::Base.descendants.each do |model|
+      if model.respond_to?(:__elasticsearch__)
+        begin
+          model.__elasticsearch__.delete_index!
+        rescue => Elasticsearch::Transport::Transport::Errors::NotFound
+          # This kills "Index does not exist" errors being written to console
+          # by this: https://github.com/elastic/elasticsearch-rails/blob/738c63efacc167b6e8faae3b01a1a0135cfc8bbb/elasticsearch-model/lib/elasticsearch/model/indexing.rb#L268
+        rescue => e
+          STDERR.puts "There was an error removing the elasticsearch index for #{model.name}: #{e.inspect}"
+        end
+      end
+    end
+  end
 end
